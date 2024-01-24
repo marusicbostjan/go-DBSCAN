@@ -2,6 +2,7 @@
 DBSCAN (Density-based spatial clustering) clustering optimized for multicore processing.
 
 Usage example:
+
 	var clusterer = NewDBSCANClusterer( 2.0, 2 )
 
 	var data = []ClusterablePoint{
@@ -26,6 +27,9 @@ package dbscan
 
 import (
 	"container/list"
+	"github.com/bestbytes/imagesearchserver/processor/distance"
+	"github.com/drewlanenga/govector"
+	"math"
 	"sync"
 )
 
@@ -39,13 +43,16 @@ type DBSCANClusterer struct {
 	AutoSelectDimension                       bool
 }
 
-func NewDBSCANClusterer(eps float64, minPts int) *DBSCANClusterer {
+func NewDBSCANClusterer(
+	eps float64,
+	minPts int,
+) *DBSCANClusterer {
 	return &DBSCANClusterer{
 		eps:    eps,
 		eps2:   eps * eps,
 		MinPts: minPts,
 
-		AutoSelectDimension: true,
+		AutoSelectDimension: false,
 	}
 }
 
@@ -57,11 +64,13 @@ func (this *DBSCANClusterer) SetEps(eps float64) {
 	this.eps2 = eps * eps
 }
 
-/**
+/*
+*
 step 1: sort data by a dimension
 step 2: slide through sorted data (in parallel), and compute all points in range of eps (everything above eps is definitely isn't directly reachable)
 step 3: build neighborhood map & proceed DFS
-**/
+*
+*/
 func (this *DBSCANClusterer) Cluster(data []ClusterablePoint) [][]ClusterablePoint {
 	if len(data) == 0 {
 		return [][]ClusterablePoint{}
@@ -79,6 +88,8 @@ func (this *DBSCANClusterer) Cluster(data []ClusterablePoint) [][]ClusterablePoi
 
 	if this.AutoSelectDimension {
 		this.SortDimensionIndex = this.PredictDimensionByMaxVariance(data)
+	} else {
+		this.SortDimensionIndex = len(data[0].GetPoint()) - 1
 	}
 
 	ClusterablePointSlice{
@@ -139,16 +150,46 @@ func (this *DBSCANClusterer) Cluster(data []ClusterablePoint) [][]ClusterablePoi
 	}
 	return clusters
 }
-
+func normalize(vec []float64) []float64 {
+	var (
+		sum = 0.0
+	)
+	for _, v := range vec {
+		sum += v * v
+	}
+	sum = math.Sqrt(sum)
+	for i, v := range vec {
+		vec[i] = v / sum
+	}
+	return vec
+}
 func (this *DBSCANClusterer) CalcDistance(aPoint, bPoint []float64) float64 {
 	var sum = 0.0
+	//aPoint = normalize(aPoint)
+	//bPoint = normalize(bPoint)
+
 	for i, size := 0, this.numDimensions; i < size; i += 1 {
 		x := aPoint[i] - bPoint[i]
 		sum += x * x
 	}
-	return sum
+	return math.Sqrt(sum)
+
 }
 
+func (this *DBSCANClusterer) CalcDistanceAngular(aPoint, bPoint []float64) float64 {
+	v1Vec := govector.Vector(aPoint)
+	v2Vec := govector.Vector(bPoint)
+	val, err := govector.Cosine(v1Vec, v2Vec)
+	if err != nil {
+		return 2.0 // 180 degrees
+	}
+	distAngular := math.Acos(val) / math.Pi
+	return distAngular
+}
+
+func (this *DBSCANClusterer) CalcDistanceCosine(aPoint, bPoint []float64) float64 {
+	return distance.CosineDistance(aPoint, bPoint)
+}
 func (this *DBSCANClusterer) BuildNeighborhoodMap(data []ClusterablePoint) []*ConcurrentQueue_InsertOnly {
 	var (
 		dataSize  = len(data)
@@ -160,18 +201,18 @@ func (this *DBSCANClusterer) BuildNeighborhoodMap(data []ClusterablePoint) []*Co
 			var (
 				x, head ClusterablePoint = nil, data[start]
 
-				headV    []float64 = head.GetPoint()
-				headDimV float64   = headV[this.SortDimensionIndex] + this.eps
+				headV []float64 = head.GetPoint()
+				//headDimV float64   = headV[this.SortDimensionIndex] + 10.0 //this.eps
 			)
 			if result[start] == nil {
 				result[start] = NewConcurrentQueue_InsertOnly()
 			}
 			result[start].Add(uint(start))
 
-			for i := start + 1; i < dataSize && data[i].GetPoint()[this.SortDimensionIndex] <= headDimV; i += 1 {
+			for i := start + 1; i < dataSize; i += 1 { // && data[i].GetPoint()[this.SortDimensionIndex] <= headDimV
 				x = data[i]
 
-				if this.CalcDistance(headV, x.GetPoint()) <= this.eps2 {
+				if this.CalcDistanceCosine(headV, x.GetPoint()) <= this.eps {
 					result[start].Add(uint(i))
 					if result[i] == nil {
 						result[i] = NewConcurrentQueue_InsertOnly()
@@ -230,7 +271,10 @@ func (this *DBSCANClusterer) PredictDimensionByMaxVariance(data []ClusterablePoi
 	return maxI
 }
 
-func Variance(data []ClusterablePoint, dimension int) float64 {
+func Variance(
+	data []ClusterablePoint,
+	dimension int,
+) float64 {
 	var (
 		size     = len(data)
 		avg      = 0.0
