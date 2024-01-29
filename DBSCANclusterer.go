@@ -27,8 +27,7 @@ package dbscan
 
 import (
 	"container/list"
-	"github.com/bestbytes/imagesearchserver/processor/distance"
-	"github.com/drewlanenga/govector"
+	"fmt"
 	"math"
 	"sync"
 )
@@ -176,20 +175,14 @@ func (this *DBSCANClusterer) CalcDistance(aPoint, bPoint []float64) float64 {
 
 }
 
-func (this *DBSCANClusterer) CalcDistanceAngular(aPoint, bPoint []float64) float64 {
-	v1Vec := govector.Vector(aPoint)
-	v2Vec := govector.Vector(bPoint)
-	val, err := govector.Cosine(v1Vec, v2Vec)
+func (this *DBSCANClusterer) CalcDistanceCosine(aPoint, bPoint []float64) float64 {
+	cosineSimilarity, err := cosineSimilarity(aPoint, bPoint)
 	if err != nil {
-		return 2.0 // 180 degrees
+		return 1.0 // 180 degrees
 	}
-	distAngular := math.Acos(val) / math.Pi
-	return distAngular
+	return 1.0 - cosineSimilarity
 }
 
-func (this *DBSCANClusterer) CalcDistanceCosine(aPoint, bPoint []float64) float64 {
-	return distance.CosineDistance(aPoint, bPoint)
-}
 func (this *DBSCANClusterer) BuildNeighborhoodMap(data []ClusterablePoint) []*ConcurrentQueue_InsertOnly {
 	var (
 		dataSize  = len(data)
@@ -291,4 +284,52 @@ func Variance(
 		sum += delta * (v - avg)
 	}
 	return sum / float64(size-1)
+}
+
+// DotProduct returns the dot product of two vectors.
+func dotProduct(x, y []float64) (
+	float64,
+	error,
+) {
+	if len(x) != len(y) {
+		return 0, fmt.Errorf("x and y have unequal lengths: %d / %d", len(x), len(y))
+	}
+
+	p := make([]float64, len(x))
+	sum := 0.0
+	for i, _ := range x {
+		p[i] = x[i] * y[i]
+		sum = sum + p[i]
+	}
+	return sum, nil
+}
+
+// Norm returns the vector norm.  Use pow = 2.0 for Euclidean.
+func norm(
+	x []float64,
+	pow float64,
+) float64 {
+	s := 0.0
+
+	for _, xval := range x {
+		s += math.Pow(xval, pow)
+	}
+
+	return math.Pow(s, 1/pow)
+}
+
+// Cosine returns the cosine similarity between two vectors.
+func cosineSimilarity(x, y []float64) (
+	float64,
+	error,
+) {
+	d, err := dotProduct(x, y)
+	if err != nil {
+		return 0.0, err
+	}
+
+	xnorm := norm(x, 2.0)
+	ynorm := norm(y, 2.0)
+
+	return d / (xnorm * ynorm), nil
 }
